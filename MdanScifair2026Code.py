@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""
-Raspberry Pi Zero W Continuous Video Capture with Switch Control and MPU6050 Data Logging
-Records video while switch is ON, stops when switch is OFF
-Logs accelerometer data to text file during recording
-Flipping switch ON again starts a new recording
-Compatible with Debian Bookworm and rpicam with Camera v3
-"""
 
 import subprocess
 import time
@@ -19,19 +11,24 @@ import board
 import adafruit_mpu6050
 
 # GPIO Configuration
-SWITCH_PIN = 17  # Change this to your GPIO pin number for recording switch
-SHUTDOWN_PIN = 23  # Change this to your GPIO pin number for shutdown button
-USE_PULL_UP = True  # Set to True if switch connects to ground, False if connects to 3.3V
+SWITCH_PIN = 17  # Recording Switch
+SHUTDOWN_PIN = 23  # Shutdown button
+USE_PULL_UP = True 
 
-# Global variables
+
 recording_process = None
 data_logging_active = False
 data_log_thread = None
 mpu = None
 shutdown_button_last_state = GPIO.HIGH  # Track button state
 
+#Default tuning values -- must enter manually 
+aoffset_x = 0
+aoffset_y = 0
+aoffset_z = 0
+
 def shutdown_button_pressed():
-    """Handle shutdown button press"""
+    #Handle shutdown button press
     global recording_process, data_logging_active, data_log_thread
     
     print("\n" + "="*50)
@@ -54,50 +51,37 @@ def shutdown_button_pressed():
         except:
             pass
         print("Video recording stopped safely.")
-    
-    # Clean up GPIO
+
     GPIO.cleanup()
     print("GPIO cleaned up.")
-    
-    # Give a moment for all processes to finish
     time.sleep(1)
-    
     print("Initiating system shutdown...")
-    # Use subprocess to call shutdown command
     subprocess.call(['sudo', 'shutdown', '-h', 'now'])
-    
-    # Exit the program
     sys.exit(0)
 
 def check_shutdown_button():
-    """Check if shutdown button is pressed (polling method)"""
+    #Checks if button is pressed
     global shutdown_button_last_state
-    
     current_state = GPIO.input(SHUTDOWN_PIN)
-    
     # Button pressed when it goes from HIGH to LOW
     if shutdown_button_last_state == GPIO.HIGH and current_state == GPIO.LOW:
         shutdown_button_last_state = current_state
         shutdown_button_pressed()
-    
     shutdown_button_last_state = current_state
 
 def setup_gpio():
-    """Setup GPIO for switch and shutdown button"""
+    #Sets up gpio for switches and buttons
     GPIO.setmode(GPIO.BCM)
-    GPIO.setwarnings(False)  # Disable warnings
-    
+    GPIO.setwarnings(False)  
     # Setup recording switch
     if USE_PULL_UP:
         GPIO.setup(SWITCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     else:
         GPIO.setup(SWITCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-    
-    # Setup shutdown button (always with pull-up) - using polling instead of edge detection
+    # Setup shutdown button 
     GPIO.setup(SHUTDOWN_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 def setup_mpu6050():
-    """Setup MPU6050 accelerometer"""
     global mpu
     try:
         i2c = board.I2C()
@@ -110,12 +94,10 @@ def setup_mpu6050():
         return False
 
 def is_switch_on():
-    """Check if switch is in ON position"""
+    # Check if switch is on
     if USE_PULL_UP:
-        # Switch connects to ground, so LOW = ON
         return GPIO.input(SWITCH_PIN) == GPIO.LOW
     else:
-        # Switch connects to 3.3V, so HIGH = ON
         return GPIO.input(SWITCH_PIN) == GPIO.HIGH
 
 def check_camera():
@@ -138,7 +120,7 @@ def check_camera():
         return False
 
 def log_accelerometer_data(txt_filepath):
-    """Continuously log accelerometer data to text file"""
+    #log accelerometer data
     global data_logging_active, mpu
     
     if mpu is None:
@@ -162,6 +144,11 @@ def log_accelerometer_data(txt_filepath):
                     accel_x, accel_y, accel_z = mpu.acceleration
                     gyro_x, gyro_y, gyro_z = mpu.gyro
                     temp = mpu.temperature
+
+                    #factor in offsets
+                    accel_x += aoffset_x
+                    accel_y += aoffset_y
+                    accel_z += aoffset_z
                     
                     # Write to file
                     f.write(f"{timestamp},{accel_x:.3f},{accel_y:.3f},{accel_z:.3f},"
@@ -182,7 +169,6 @@ def start_recording():
     """Start recording video and logging accelerometer data"""
     global recording_process, data_logging_active, data_log_thread
     
-    # Create Videos directory if it doesn't exist
     videos_dir = os.path.expanduser("~/Videos")
     os.makedirs(videos_dir, exist_ok=True)
     
@@ -216,7 +202,7 @@ def start_recording():
     return h264_filepath, txt_filepath
 
 def stop_recording(h264_filepath, txt_filepath):
-    """Stop recording and convert to MP4, close data log"""
+    # Stop recording and convert to MP4, close data log
     global recording_process, data_logging_active, data_log_thread
     
     if recording_process is None:
@@ -231,7 +217,7 @@ def stop_recording(h264_filepath, txt_filepath):
     
     print("Data logging stopped, file closed.")
     
-    # Send SIGINT to gracefully stop rpicam-vid
+    # Stop rpicam-vid
     recording_process.send_signal(signal.SIGINT)
     recording_process.wait()
     recording_process = None
@@ -270,7 +256,7 @@ def stop_recording(h264_filepath, txt_filepath):
         print(f"Final video saved to: {mp4_filepath}")
 
 def signal_handler(sig, frame):
-    """Handle Ctrl+C gracefully"""
+    # Handle cntrl + c shutdown
     global recording_process, data_logging_active, data_log_thread
     print("\nShutting down...")
     
@@ -344,4 +330,5 @@ if __name__ == "__main__":
         if recording_process:
             recording_process.terminate()
             recording_process.wait()
+
         GPIO.cleanup()
