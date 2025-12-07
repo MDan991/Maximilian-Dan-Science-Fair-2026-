@@ -1,0 +1,18 @@
+[Unit]
+Description=Camera Recorder with MPU6050
+After=multi-user.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=mpdan
+WorkingDirectory=/home/mpdan
+ExecStartPre=/bin/sleep 10
+ExecStart=/home/mpdan/mpu6050_env/bin/python3 /home/mpdan/fshutdown.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
