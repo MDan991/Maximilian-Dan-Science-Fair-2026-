@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 
 import subprocess
 import time
@@ -10,91 +11,99 @@ import threading
 import board
 import adafruit_mpu6050
 
-# GPIO Configuration
-SWITCH_PIN = 17  # Recording Switch
-SHUTDOWN_PIN = 23  # Shutdown button
-USE_PULL_UP = True 
-
-
+# config
+SWITCH_PIN = 17  
+SHUTDOWN_PIN = 23  
+LED_PIN = 22 
+USE_PULL_UP = True  
 recording_process = None
 data_logging_active = False
 data_log_thread = None
 mpu = None
-shutdown_button_last_state = GPIO.HIGH  # Track button state
+shutdown_button_last_state = GPIO.HIGH  
 
-#Default tuning values -- must enter manually 
-aoffset_x = 0
-aoffset_y = 0
-aoffset_z = 0
+# accel offsets
+ACCEL_OFFSET_X = 0.194
+ACCEL_OFFSET_Y = 0.319  
+ACCEL_OFFSET_Z = -1.432  
+
+
+
 
 def shutdown_button_pressed():
-    #Handle shutdown button press
+    # handle button press
     global recording_process, data_logging_active, data_log_thread
     
     print("\n" + "="*50)
-    print("SHUTDOWN BUTTON PRESSED!")
-    print("Stopping all recordings and shutting down safely...")
+    print("stopping")
     print("="*50)
     
-    # Stop data logging
     data_logging_active = False
     if data_log_thread is not None:
         data_log_thread.join(timeout=3)
-        print("Data logging stopped safely.")
+        print("data logging stopped")
     
-    # Stop video recording
     if recording_process:
-        print("Stopping video recording...")
+        print("stopped video recording")
         try:
             recording_process.send_signal(signal.SIGINT)
             recording_process.wait(timeout=5)
         except:
             pass
-        print("Video recording stopped safely.")
-
+    
     GPIO.cleanup()
     print("GPIO cleaned up.")
+    
     time.sleep(1)
-    print("Initiating system shutdown...")
+    
+    print("shutting down")
     subprocess.call(['sudo', 'shutdown', '-h', 'now'])
+    
     sys.exit(0)
 
 def check_shutdown_button():
-    #Checks if button is pressed
+    """Check if shutdown button is pressed (polling method)"""
     global shutdown_button_last_state
+    
     current_state = GPIO.input(SHUTDOWN_PIN)
-    # Button pressed when it goes from HIGH to LOW
+    
     if shutdown_button_last_state == GPIO.HIGH and current_state == GPIO.LOW:
         shutdown_button_last_state = current_state
         shutdown_button_pressed()
+    
     shutdown_button_last_state = current_state
 
 def setup_gpio():
-    #Sets up gpio for switches and buttons
+    """Setup GPIO for switch and shutdown button"""
     GPIO.setmode(GPIO.BCM)
-    GPIO.setwarnings(False)  
-    # Setup recording switch
+    GPIO.setwarnings(False)  # Disable warnings
+    
+    # setup recording switch
     if USE_PULL_UP:
         GPIO.setup(SWITCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     else:
         GPIO.setup(SWITCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-    # Setup shutdown button 
+    
+    # setup shutdown button
     GPIO.setup(SHUTDOWN_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    
+    # setup LED 
+    GPIO.setup(LED_PIN, GPIO.OUT)
+    GPIO.output(LED_PIN, GPIO.LOW) 
 
 def setup_mpu6050():
+    """Setup MPU6050 accelerometer"""
     global mpu
     try:
         i2c = board.I2C()
         mpu = adafruit_mpu6050.MPU6050(i2c)
-        print("MPU6050 initialized successfully")
         return True
     except Exception as e:
         print(f"Error initializing MPU6050: {e}")
-        print("Continuing without accelerometer data...")
         return False
 
 def is_switch_on():
-    # Check if switch is on
+    """Check if switch is in ON position"""
     if USE_PULL_UP:
         return GPIO.input(SWITCH_PIN) == GPIO.LOW
     else:
@@ -110,52 +119,47 @@ def check_camera():
             timeout=5
         )
         if "Available cameras" in result.stdout:
-            print("Camera detected successfully")
+            print("camera works")
             return True
         else:
-            print("No camera detected!")
+            print("camera doesnt work")
             return False
     except Exception as e:
         print(f"Error checking camera: {e}")
         return False
 
 def log_accelerometer_data(txt_filepath):
-    #log accelerometer data
+    """Continuously log accelerometer data to text file"""
     global data_logging_active, mpu
     
     if mpu is None:
-        print("MPU6050 not available, skipping data logging")
+        print("MPU6050 failed")
         return
     
     try:
         with open(txt_filepath, 'w') as f:
-            # Write header
             f.write("Timestamp,Accel_X,Accel_Y,Accel_Z,Gyro_X,Gyro_Y,Gyro_Z,Temperature\n")
             f.flush()
             
-            print(f"Logging accelerometer data to: {txt_filepath}")
+            print(f"logging data to: {txt_filepath}")
+            print(f"offsets - X: {ACCEL_OFFSET_X}, Y: {ACCEL_OFFSET_Y}, Z: {ACCEL_OFFSET_Z}")
             
             while data_logging_active:
                 try:
-                    # Get current time
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                     
-                    # Read sensor data
-                    accel_x, accel_y, accel_z = mpu.acceleration
+                    accel_x_raw, accel_y_raw, accel_z_raw = mpu.acceleration
                     gyro_x, gyro_y, gyro_z = mpu.gyro
                     temp = mpu.temperature
-
-                    #factor in offsets
-                    accel_x += aoffset_x
-                    accel_y += aoffset_y
-                    accel_z += aoffset_z
                     
-                    # Write to file
+                    accel_x = accel_x_raw - ACCEL_OFFSET_X
+                    accel_y = accel_y_raw - ACCEL_OFFSET_Y
+                    accel_z = accel_z_raw - ACCEL_OFFSET_Z
+                
                     f.write(f"{timestamp},{accel_x:.3f},{accel_y:.3f},{accel_z:.3f},"
                            f"{gyro_x:.3f},{gyro_y:.3f},{gyro_z:.3f},{temp:.2f}\n")
                     f.flush()
                     
-                    # Wait 0.5 seconds before next reading
                     time.sleep(0.5)
                     
                 except Exception as e:
@@ -170,23 +174,23 @@ def start_recording():
     global recording_process, data_logging_active, data_log_thread
     
     videos_dir = os.path.expanduser("~/Videos")
-    os.makedirs(videos_dir, exist_ok=True)
     
-    # Generate filename with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     h264_filename = f"video_{timestamp}.h264"
     txt_filename = f"video_{timestamp}.txt"
     h264_filepath = os.path.join(videos_dir, h264_filename)
     txt_filepath = os.path.join(videos_dir, txt_filename)
     
-    print(f"Starting recording...")
-    print(f"Video: {h264_filepath}")
-    print(f"Data log: {txt_filepath}")
+    print(f"starting recording")
+    print(f"video: {h264_filepath}")
+    print(f"data log: {txt_filepath}")
     
-    # Start video recording
+    GPIO.output(LED_PIN, GPIO.HIGH)
+    
+    # start video recording 
     recording_process = subprocess.Popen([
         "rpicam-vid",
-        "-t", "0",  # Infinite recording
+        "-t", "0",  
         "-o", h264_filepath,
         "--nopreview",
         "--width", "720",
@@ -194,7 +198,7 @@ def start_recording():
         "--framerate", "30"
     ])
     
-    # Start accelerometer data logging in separate thread
+    # start accelerometer logging 
     data_logging_active = True
     data_log_thread = threading.Thread(target=log_accelerometer_data, args=(txt_filepath,))
     data_log_thread.start()
@@ -202,39 +206,41 @@ def start_recording():
     return h264_filepath, txt_filepath
 
 def stop_recording(h264_filepath, txt_filepath):
-    # Stop recording and convert to MP4, close data log
+    """Stop recording and convert to MP4, close data log"""
     global recording_process, data_logging_active, data_log_thread
     
     if recording_process is None:
         return
     
-    print("Stopping recording and data logging...")
+    print("stopping recording and logging")
     
-    # Stop data logging thread
+    # turn off LED
+    GPIO.output(LED_PIN, GPIO.LOW)
+    
+    # stop logging 
     data_logging_active = False
     if data_log_thread is not None:
         data_log_thread.join(timeout=2)
     
-    print("Data logging stopped, file closed.")
+    print("logging stopped, file closed")
     
-    # Stop rpicam-vid
+    # stop rpicam
     recording_process.send_signal(signal.SIGINT)
     recording_process.wait()
     recording_process = None
     
-    print("Video recording stopped!")
+    print("recording stopped")
     
-    # Wait a moment for file to be fully written
     time.sleep(1)
     
-    # Check if h264 file exists and has content
+    # check if file exists
     if not os.path.exists(h264_filepath) or os.path.getsize(h264_filepath) == 0:
-        print("Error: Recording file is empty or doesn't exist")
+        print("Error: file doesnt work")
         return
     
-    # Convert to MP4
+    # convert
     mp4_filepath = h264_filepath.replace(".h264", ".mp4")
-    print(f"Converting to MP4 format...")
+    print(f"converting file")
     
     result = subprocess.run([
         "/usr/bin/ffmpeg",
@@ -246,26 +252,26 @@ def stop_recording(h264_filepath, txt_filepath):
     ], capture_output=True, text=True)
     
     if result.returncode != 0:
-        print(f"FFmpeg conversion failed!")
+        print(f"conversion failed")
         print(f"Error: {result.stderr}")
         print(f"H.264 file saved at: {h264_filepath}")
     else:
-        # Remove the h264 file after successful conversion
+        # remove h264
         os.remove(h264_filepath)
-        print(f"Conversion complete! Original H.264 file removed.")
-        print(f"Final video saved to: {mp4_filepath}")
+        print(f"conversion complete H.264 file removed.")
+        print(f"video saved to: {mp4_filepath}")
 
 def signal_handler(sig, frame):
-    # Handle cntrl + c shutdown
+    """Handle Ctrl+C gracefully"""
     global recording_process, data_logging_active, data_log_thread
-    print("\nShutting down...")
+    print("\nShutting down")
     
-    # Stop data logging
+    # stop logging
     data_logging_active = False
     if data_log_thread is not None:
         data_log_thread.join(timeout=2)
     
-    # Stop video recording
+    # stop recording
     if recording_process:
         recording_process.terminate()
         recording_process.wait()
@@ -276,44 +282,34 @@ def signal_handler(sig, frame):
 def main():
     global recording_process
     
-    # Setup signal handler for Ctrl+C
+    # cntrl c support
     signal.signal(signal.SIGINT, signal_handler)
     
-    # Check camera
+    # check camera
     if not check_camera():
-        print("Cannot proceed - camera not detected")
+        print("cannot proceed - no cameara")
         return
     
-    # Setup MPU6050
+    # setup accel
     setup_mpu6050()
     
     setup_gpio()
-    
-    print("Ready!")
-    print(f"- Recording switch on GPIO {SWITCH_PIN}: Flip ON to start recording, OFF to stop.")
-    print(f"- Shutdown button on GPIO {SHUTDOWN_PIN}: Press to safely shutdown Pi.")
-    print("Press Ctrl+C to exit program without shutdown.")
-    print("")
     
     current_video_filepath = None
     current_data_filepath = None
     
     while True:
-        # Check shutdown button first
+        # check button
         check_shutdown_button()
         
         if is_switch_on():
-            # Switch is ON
             if recording_process is None:
-                # Not currently recording, start new recording
-                print("\n=== Switch ON ===")
+                print("\nSwitch ON")
                 time.sleep(1)  # Short delay to debounce
                 current_video_filepath, current_data_filepath = start_recording()
         else:
-            # Switch is OFF
             if recording_process is not None:
-                # Currently recording, stop it
-                print("\n=== Switch OFF ===")
+                print("\nSwitch OFF")
                 stop_recording(current_video_filepath, current_data_filepath)
                 current_video_filepath = None
                 current_data_filepath = None
@@ -330,5 +326,5 @@ if __name__ == "__main__":
         if recording_process:
             recording_process.terminate()
             recording_process.wait()
-
+        GPIO.output(LED_PIN, GPIO.LOW)  # Make sure LED is off
         GPIO.cleanup()
